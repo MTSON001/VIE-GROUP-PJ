@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ứng Dụng Kiểm Kê Kho</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    body { background-color: #f8f9fa; padding: 10px; font-family: sans-serif; }
+    .card { border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    .product-img { width: 100px; height: 100px; object-fit: cover; border-radius: 8px; border: 1px solid #dee2e6; }
+    #loadingOverlay { position: fixed; inset: 0; background: rgba(255,255,255,0.8); z-index: 9999; display: flex; justify-content: center; align-items: center; }
+    #reader { width: 100%; border-radius: 8px; overflow: hidden; border: 2px solid #198754; display: none; margin-bottom: 15px; background: #000; }
+  </style>
+</head>
+<body>
+
+  <div id="loadingOverlay">
+    <div class="text-center">
+      <div class="spinner-border text-primary" role="status"></div>
+      <p class="mt-2 fw-bold text-secondary">Đang tải dữ liệu kho...</p>
+    </div>
+  </div>
+
+  <div class="modal fade" id="nameModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title">👤 Xác Nhận Người Kiểm Kho</h5>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted">Vui lòng nhập họ tên của bạn trước khi bắt đầu:</p>
+          <input type="text" id="inspectorInput" class="form-control form-control-lg" placeholder="Ví dụ: Nguyễn Văn A">
+          <div id="nameError" class="text-danger mt-2 small" style="display:none;">Vui lòng nhập họ tên của bạn!</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary w-100 py-2 fw-bold" onclick="saveInspectorName()">Bắt Đầu Kiểm Kho</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container py-2" style="max-width: 600px;">
+    <div class="card p-3 mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h4 class="fw-bold text-dark m-0">📦 Kiểm Kê Kho Nhanh</h4>
+        <span class="badge bg-info text-dark" id="inspectorBadge" style="cursor:pointer;" onclick="changeInspector()" title="Bấm để đổi tên"></span>
+      </div>
+
+      <div id="reader"></div>
+
+      <div class="mb-3">
+        <label class="form-label fw-bold text-muted small">🔍 Quét mã vạch trực tiếp hoặc gõ SKU:</label>
+        <div class="input-group">
+          <input type="text" id="searchInput" class="form-control form-control-lg" placeholder="Gõ SKU/GTIN hoặc bật camera...">
+          <button class="btn btn-success fw-bold px-3" type="button" id="btnScanToggle" onclick="toggleScanner()">📷 Bật Camera</button>
+          <button class="btn btn-outline-primary fw-bold px-3" type="button" onclick="searchProduct()">Tìm</button>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-bold text-muted small">Hoặc chọn sản phẩm từ danh sách:</label>
+        <select id="productSelect" class="form-select" onchange="displaySelectedProduct()">
+          <option value="">-- Chọn sản phẩm --</option>
+        </select>
+      </div>
+
+      <div id="productCard" class="card bg-light p-3 mb-3 border-primary" style="display:none;">
+        <div class="d-flex gap-3 align-items-center">
+          <img id="pImg" src="" class="product-img" alt="Ảnh SP">
+          <div>
+            <h5 id="pName" class="fw-bold text-primary mb-1">Tên sản phẩm</h5>
+            <p class="mb-1 text-muted small">SKU: <b id="pSku" class="text-dark"></b> | GTIN: <b id="pGtin" class="text-dark"></b></p>
+            <p class="mb-1 text-muted small">Kho: <b id="pTenKho" class="text-dark"></b> | KV: <b id="pKhuVuc" class="text-dark"></b> | Kệ: <span id="pViTri" class="text-danger fw-bold"></span></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-bold text-muted small">Số lượng thực tế đếm được (Cột K):</label>
+        <input type="number" id="actualInput" class="form-control form-control-lg text-center fw-bold text-success" placeholder="0" inputmode="numeric">
+      </div>
+
+      <button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" onclick="saveData()">💾 Lưu Số Liệu Vị Trí Này</button>
+      <div id="statusMsg" class="text-center mt-2 fw-bold"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // >>> DÁN URL APPS SCRIPT (.../exec) VÀO ĐÂY <<<
+    const API_URL = "https://script.google.com/macros/s/AKfycbxqDji79GD9ba0zGOTb6eqIb40bxTlesvzDhhMS5t4wLJhZOIQ_OUFzDVXsSPk65DYv/exec";
+
+    let inventoryData = [];
+    let currentItem = null;
+    let html5QrCode = null;
+    let isScanning = false;
+    let inspectorName = localStorage.getItem("inspector_name") || "";
+
+    window.onload = function () {
+      if (!inspectorName) new bootstrap.Modal(document.getElementById('nameModal')).show();
+      else updateInspectorUI();
+
+      fetch(API_URL)
+        .then(r => r.json())
+        .then(data => {
+          inventoryData = data;
+          document.getElementById('loadingOverlay').style.display = 'none';
+          populateSelect(inventoryData);
+        })
+        .catch(err => {
+          document.getElementById('loadingOverlay').style.display = 'none';
+          alert("Không tải được dữ liệu kho: " + err.message);
+        });
+
+      document.getElementById('searchInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter') searchProduct();
+      });
+    };
+
+    function saveInspectorName() {
+      let name = document.getElementById('inspectorInput').value.trim();
+      if (!name) { document.getElementById('nameError').style.display = 'block'; return; }
+      localStorage.setItem("inspector_name", name);
+      inspectorName = name;
+      updateInspectorUI();
+      bootstrap.Modal.getInstance(document.getElementById('nameModal')).hide();
+    }
+
+    function changeInspector() {
+      let n = prompt("Nhập lại tên nhân viên kiểm kho:", inspectorName);
+      if (n && n.trim()) {
+        inspectorName = n.trim();
+        localStorage.setItem("inspector_name", inspectorName);
+        updateInspectorUI();
+      }
+    }
+
+    function updateInspectorUI() {
+      document.getElementById('inspectorBadge').innerText = "👤 " + inspectorName;
+    }
+
+    function populateSelect(data) {
+      let select = document.getElementById('productSelect');
+      select.innerHTML = '<option value="">-- Chọn sản phẩm --</option>';
+      data.forEach((item, index) => {
+        let opt = document.createElement('option');
+        opt.value = index;
+        opt.textContent = `[Kho: ${item.tenKho || 'N/A'} - KV: ${item.khuVuc || 'N/A'} - Kệ: ${item.viTri || 'N/A'}] SKU: ${item.sku} (${item.name})`;
+        select.appendChild(opt);
+      });
+    }
+
+    // ===== QUÉT TRỰC TIẾP =====
+    function toggleScanner() {
+      if (isScanning) { stopScanner(false); return; }
+
+      let statusDiv = document.getElementById('statusMsg');
+      let btn = document.getElementById('btnScanToggle');
+      document.getElementById('reader').style.display = 'block';
+      btn.innerText = "❌ Tắt Camera";
+      btn.classList.replace('btn-success', 'btn-danger');
+      statusDiv.innerHTML = "⏳ Đang khởi động camera...";
+
+      html5QrCode = new Html5Qrcode("reader", {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.ITF, Html5QrcodeSupportedFormats.QR_CODE
+        ],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      });
+
+      html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 15, qrbox: { width: 280, height: 140 } },
+        text => {
+          if (navigator.vibrate) navigator.vibrate(100);
+          document.getElementById('searchInput').value = text;
+          stopScanner(true);
+        },
+        () => {}
+      ).then(() => {
+        isScanning = true;
+        statusDiv.innerHTML = "";
+      }).catch(err => {
+        statusDiv.innerHTML = "<span class='text-danger'>❌ Không bật được camera. Hãy bấm 'Cho phép' và đảm bảo trang chạy HTTPS.</span>";
+        resetScannerUI();
+      });
+    }
+
+    function stopScanner(thenSearch) {
+      let done = () => { resetScannerUI(); if (thenSearch) searchProduct(); };
+      if (html5QrCode && isScanning) html5QrCode.stop().then(done).catch(done);
+      else done();
+    }
+
+    function resetScannerUI() {
+      document.getElementById('reader').style.display = 'none';
+      let btn = document.getElementById('btnScanToggle');
+      btn.innerText = "📷 Bật Camera";
+      btn.classList.replace('btn-danger', 'btn-success');
+      isScanning = false;
+    }
+
+    function searchProduct() {
+      let keyword = document.getElementById('searchInput').value.trim().toLowerCase();
+      if (!keyword) return;
+      let i = inventoryData.findIndex(it =>
+        String(it.sku).toLowerCase() === keyword || String(it.gtin).toLowerCase() === keyword);
+      if (i !== -1) {
+        document.getElementById('productSelect').value = i;
+        displaySelectedProduct();
+        document.getElementById('actualInput').focus();
+        document.getElementById('actualInput').select();
+      } else {
+        alert("Không tìm thấy sản phẩm có SKU hoặc GTIN là: " + keyword);
+      }
+    }
+
+    function displaySelectedProduct() {
+      let index = document.getElementById('productSelect').value;
+      if (index === "") {
+        document.getElementById('productCard').style.display = 'none';
+        currentItem = null;
+        return;
+      }
+      currentItem = inventoryData[index];
+      document.getElementById('pName').innerText = currentItem.name;
+      document.getElementById('pSku').innerText = currentItem.sku;
+      document.getElementById('pGtin').innerText = currentItem.gtin || "Không có";
+      document.getElementById('pTenKho').innerText = currentItem.tenKho || "N/A";
+      document.getElementById('pKhuVuc').innerText = currentItem.khuVuc || "N/A";
+      document.getElementById('pViTri').innerText = currentItem.viTri || "Chưa gán";
+      document.getElementById('pImg').src = currentItem.imageUrl;
+      document.getElementById('actualInput').value = currentItem.actualStock || "";
+      document.getElementById('productCard').style.display = 'block';
+    }
+
+    function saveData() {
+      if (!currentItem) { alert("Vui lòng chọn hoặc quét sản phẩm trước!"); return; }
+      let actualQty = document.getElementById('actualInput').value;
+      if (actualQty === "") { alert("Vui lòng nhập số lượng thực tế!"); return; }
+
+      let statusDiv = document.getElementById('statusMsg');
+      statusDiv.innerHTML = "<span class='text-info'>Đang lưu lên hệ thống...</span>";
+
+      // text/plain để tránh preflight CORS (Apps Script không hỗ trợ OPTIONS)
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ sku: currentItem.sku, qty: actualQty, inspector: inspectorName })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (!res.ok) throw new Error(res.msg);
+        statusDiv.innerHTML = "<span class='text-success'>✅ " + res.msg + "</span>";
+        currentItem.actualStock = actualQty;
+        setTimeout(() => { statusDiv.innerHTML = ""; }, 3000);
+        let box = document.getElementById('searchInput');
+        box.value = "";
+        box.focus();
+      })
+      .catch(err => {
+        statusDiv.innerHTML = "<span class='text-danger'>❌ Lỗi: " + err.message + "</span>";
+      });
+    }
+  </script>
+</body>
+</html>
